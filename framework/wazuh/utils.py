@@ -9,6 +9,7 @@ from tempfile import mkstemp
 from subprocess import call, CalledProcessError
 from os import remove, chmod, chown, path, listdir, close as close
 from datetime import datetime, timedelta
+import hashlib
 import json
 import stat
 
@@ -304,6 +305,7 @@ def chmod_r(filepath, mode):
             elif path.isdir(itempath):
                 chmod_r(itempath, mode)
 
+
 def chown_r(filepath, uid, gid):
     """
     Recursive chmod.
@@ -321,3 +323,11 @@ def chown_r(filepath, uid, gid):
                 chown(itempath, uid, gid)
             elif path.isdir(itempath):
                 chown_r(itempath, uid, gid)
+
+
+def md5(fname):
+    hash_md5 = hashlib.md5()
+    with open(fname, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()

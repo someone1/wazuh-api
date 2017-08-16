@@ -3,21 +3,24 @@
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
-from wazuh.utils import execute, cut_array, sort_array, search_array, chmod_r, chown_r
+from wazuh.utils import execute, cut_array, sort_array, search_array, chmod_r, chown_r, md5
 from wazuh.exception import WazuhException
 from wazuh.database import Connection
 from wazuh import manager
 from wazuh import common
 from glob import glob
 from datetime import date, datetime
-from hashlib import md5, sha512
+from hashlib import sha512
 from time import time, mktime
 from platform import platform
 from os import remove, chown, chmod, path, rename, stat, utime, environ
+import os
 from pwd import getpwnam
 from grp import getgrnam
 import requests
 import json
+
+
 
 class Node:
     """
@@ -100,6 +103,112 @@ class Node:
         data["cluster"] = config_cluster["cluster.name"]
 
         return data
+
+    @staticmethod
+    def get_files(*args, **kwargs):
+
+        """
+        Get files
+
+        :param file: Filters by log type: all, error or info.
+        :param offset: First item to return.
+        :param limit: Maximum number of items to return.
+        :param sort: Sorts the items. Format: {"fields":["field1","field2"],"order":"asc|desc"}.
+        :param search: Looks for items with the specified string.
+        :return: Dictionary: {'items': array of items, 'totalItems': Number of items (without applying the limit)}
+        """
+
+        file_download = ""
+        if args:
+            if len(args) == 1:
+                file = args[0]
+            else:
+                raise WazuhException(1700)
+        elif kwargs:
+            if len(kwargs) == 1:
+                file_download = kwargs['download']
+            else:
+                raise WazuhException(1700)
+
+        items = [
+                    {
+                        "file_name":"/etc/client.keys",
+                        "mode": 0o640,
+                        "user": "root",
+                        "group": "ossec",
+                        "format":"plain",
+                        "type": "file",
+                        "write_mode": "atomic",
+                        "conditions": {
+                            "remote_time_higher": True,
+                            "different_md5": True,
+                            "larger_file_size": True
+                        }
+                    },
+                    # {"file_name":"/etc/ossec.conf", "format":"xml"},
+                    {
+                        "file_name":"/queue/agent-info",
+                        "mode": 0o644,
+                        "user": "ossecr",
+                        "group": "ossec",
+                        "format":"plain",
+                        "type": "directory",
+                        "write_mode": "normal",
+                        "conditions": {
+                            "remote_time_higher": True,
+                            "different_md5": False,
+                            "larger_file_size": False
+                        }
+                    }
+            ]
+
+
+        # Expand directory
+        new_items = []
+        for item in items:
+            fullpath = common.ossec_path + item["file_name"]
+
+            if item["type"] == "file":
+                new_item = dict(item)
+                new_item["fullpath"] = fullpath
+                new_items.append(new_item)
+            else:
+                for entry in os.listdir(fullpath):
+                    new_item = dict(item)
+                    new_item["fullpath"] = os.path.join(fullpath, entry)
+                    new_items.append(new_item)
+
+        files_output = {}
+        for new_item in new_items:
+
+            #Check if file exists
+            if not os.path.isfile(new_item["fullpath"]):
+                continue
+
+            modification_time = '{0}'.format(datetime.utcfromtimestamp(int(os.path.getmtime(new_item["fullpath"]))))
+            size = os.path.getsize(new_item["fullpath"])
+            md5_hash = md5(new_item["fullpath"])
+
+            file_output = {
+                new_item["fullpath"] : {
+                    "md5": md5_hash,
+                    "modification_time" : modification_time,
+                    "format" : new_item['format'],
+                    "mode" : new_item['mode'],
+                    "size" : size,
+                    "user" : new_item['user'],
+                    "group" : new_item['group'],
+                    "write_mode" : new_item['write_mode'],
+                    "conditions" : new_item['conditions']
+                    }
+                }
+
+            if file_download != "" and file_download == new_item["fullpath"]:
+                return file_output
+
+            files_output.update(file_output)
+
+        return files_output
 
     @staticmethod
     def send_request_api(url, auth, verify, type):
@@ -222,7 +331,7 @@ class Node:
             download_list = []
 
             # Get remote files
-            url = '{0}{1}'.format(node, "/manager/files")
+            url = '{0}{1}'.format(node, "/cluster/node/files")
             error, response = Node.send_request_api(url, auth, verify, "json")
 
             if error:
@@ -356,7 +465,7 @@ class Node:
 
             for item in download_list:
                 try:
-                    url = '{0}{1}'.format(node, "/manager/files?download="+item["file"]["name"])
+                    url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
 
                     error, downloaded_file = Node.send_request_api(url, auth, verify, "text")
                     if error:

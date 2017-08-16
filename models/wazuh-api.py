@@ -199,8 +199,7 @@ if __name__ == "__main__":
             '/manager/logs/summary': manager.ossec_log_summary,
             '/manager/logs': manager.ossec_log,
 
-            '/manager/files': manager.get_files,
-
+            '/cluster/node/files': Node.get_files,
             '/cluster/node': Node.node_info,
             '/cluster/nodes': Node.cluster_nodes,
             '/cluster/node/token': Node.get_token,

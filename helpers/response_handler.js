@@ -75,7 +75,7 @@ exports.send_file = function(req, res, file_name, type){
 
     if (type == 'files') {
 
-      var data_request = {'function': '/manager/files', 'arguments': {'download': file_name}};
+      var data_request = {'function': '/cluster/node/files', 'arguments': {'download': file_name}};
 
       var send_aux = this.send;
       execute.exec(python_bin, [wazuh_control], data_request, function (data) {
