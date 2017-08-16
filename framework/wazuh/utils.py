@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import hashlib
 import json
 import stat
-
+import requests
 
 try:
     from subprocess import check_output
@@ -331,3 +331,37 @@ def md5(fname):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
+
+def send_request(url, user, password, verify, type):
+    auth = requests.auth.HTTPBasicAuth(user, password)
+
+    error = 0
+    try:
+        r = requests.get(url, auth=auth, params=None, timeout=2, verify=verify)
+        if r.status_code == 401:
+              data = str(r.text)
+              error = 401
+    except requests.exceptions.Timeout as e:
+        data = str(e)
+        error = 1
+    except requests.exceptions.TooManyRedirects as e:
+        data = str(e)
+        error = 2
+    except requests.exceptions.RequestException as e:
+        data = str(e)
+        error = 3
+    except Exception as e:
+        data = str(e)
+        error = 4
+
+    if error == 0:
+        if type == "json":
+            try:
+                data = json.loads(r.text)
+            except Exception as e:
+                data = str(e)
+                error = 5
+        else:
+            data = r.text
+
+    return (error, data)
