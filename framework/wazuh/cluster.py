@@ -42,21 +42,23 @@ CLUSTER_ITEMS = [
 
 def read_config():
     # Get api/configuration/config.js content
-    config_cluster = {}
     try:
         with open(common.api_config_path) as api_config_file:
-            for line in api_config_file:
-                if line.startswith('config.cluster.'):
-                    name, var = line.partition("=")[::2]
-                    config_cluster[name.strip().split("config.")[1]] = var.replace("\n","").replace("]","").replace("[","").replace('\"',"").replace(";","").strip()
+            lines = filter(lambda x: x.startswith('config.cluster.'), 
+                           api_config_file.readlines())
+        
+        name_vars = map(lambda x: x.partition("=")[::2], lines)
+        config_cluster = {name.strip().split('config.')[1]:
+                          var.replace("\n","").replace("]","").replace("[","").\
+                          replace('\"',"").replace(";","").strip()
+                          for name,var in name_vars}
 
-        if "cluster.nodes" in config_cluster:
+        if "cluster.nodes" in config_cluster.keys():
             all_nodes = config_cluster["cluster.nodes"].split(",")
-            config_cluster["cluster.nodes"] = []
-            for node in all_nodes:
-                config_cluster["cluster.nodes"].append(node.strip())
+            config_cluster['cluster.nodes'] = [node.strip() for node in all_nodes]
         else:
             config_cluster["cluster.nodes"] = []
+            
     except Exception as e:
         raise WazuhException(3000, str(e))
 
