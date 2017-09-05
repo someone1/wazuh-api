@@ -66,31 +66,25 @@ def read_config():
 
 
 def get_nodes():
-
     config_cluster = read_config()
     if not config_cluster:
         raise WazuhException(3000, "No config found")
 
-    # TODO: Add my self as a node
-    data = []
-    for url in config_cluster["cluster.nodes"]:
-        item = {}
-        item["url"] = url
+    # Add localhost as node
+    data = [{'url':'localhost', 'node':config_cluster['cluster.node'], 
+             'status':'connected', 'cluster':config_cluster['cluster.name']}]
 
-        url = '{0}{1}'.format(url, "/cluster/node")
-        error, response = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "json")
+    for url in config_cluster["cluster.nodes"]:
+        req_url = '{0}{1}'.format(url, "/cluster/node")
+        error, response = send_request(req_url, config_cluster["cluster.user"], 
+                            config_cluster["cluster.password"], False, "json")
 
         if error:
-            item["error"] = response
-            item["status"] = "disconnected"
-            data.append(item)
+            data.append({'error': response, 'status':'disconnected'})
             continue
 
-        item["node"] = response["data"]["node"]
-        item["status"] = "connected"
-        item["cluster"] = response["data"]["cluster"]
-
-        data.append(item)
+        data.append({'url':url, 'node':response['data']['node'], 
+                     'status':'connected', 'cluster':response['data']['cluster']})
 
     return {'items': data, 'totalItems': len(data)}
 
