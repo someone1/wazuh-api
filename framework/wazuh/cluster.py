@@ -9,7 +9,7 @@ from wazuh import common
 from datetime import datetime
 from hashlib import sha512
 from time import time, mktime
-from os import path, listdir, rename, utime, environ
+from os import path, listdir, rename, utime, environ, umask
 
 
 CLUSTER_ITEMS = [
@@ -174,7 +174,7 @@ def _check_token(other_token):
         return False
 
 
-def _update_file(fullpath, content, umask=None, mtime=None, w_mode=None):
+def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
 
     # Set Timezone to epoch converter
     environ['TZ']='UTC'
@@ -187,9 +187,11 @@ def _update_file(fullpath, content, umask=None, mtime=None, w_mode=None):
 
     dest_file = open(f_temp, "w")
     dest_file.write(content)
-    dest_file.close()
 
-    # ToDo: set umask
+    if umask_int:
+        umask(umask_int)
+
+    dest_file.close()
 
     mtime_epoch = int(mktime(datetime.strptime(mtime, "%Y-%m-%d %H:%M:%S").timetuple()))
     utime(f_temp, (mtime_epoch, mtime_epoch)) # (atime, mtime)
@@ -226,7 +228,8 @@ def sync(output_file=False, force=None):
 
         # Get remote token
         url = '{0}{1}'.format(node, "/cluster/node/token")
-        error, response = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "json")
+        error, response = send_request(url, config_cluster["cluster.user"], 
+                              config_cluster["cluster.password"], False, "json")
 
         if error:
             error_list.append({'node': node, 'error': response})
@@ -239,7 +242,8 @@ def sync(output_file=False, force=None):
 
         # Get remote files
         url = '{0}{1}'.format(node, "/cluster/node/files")
-        error, response = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "json")
+        error, response = send_request(url, config_cluster["cluster.user"], 
+                              config_cluster["cluster.password"], False, "json")
 
         if error:
             error_list.append({'node': node, 'error': response})
@@ -255,8 +259,8 @@ def sync(output_file=False, force=None):
 
         # Shared files
         for filename in shared_files:
-            own_items[filename]["modification_time"]
-            local_file_time = datetime.strptime(own_items[filename]["modification_time"], "%Y-%m-%d %H:%M:%S")
+            local_file_time = datetime.strptime(own_items[filename]["modification_time"], 
+                                                "%Y-%m-%d %H:%M:%S")
             local_file_size = own_items[filename]["size"]
             local_file = {
                 "name": filename,
@@ -268,11 +272,14 @@ def sync(output_file=False, force=None):
                 "size" : own_items[filename]['size']
             }
 
-            remote_file_time = datetime.strptime(their_items[filename]["modification_time"], "%Y-%m-%d %H:%M:%S")
+            remote_file_time = datetime.strptime(their_items[filename]["modification_time"], 
+                                                "%Y-%m-%d %H:%M:%S")
             remote_file_size = their_items[filename]["size"]
             remote_file = {
                 "name": filename,
-                "umask" : their_items[filename]['umask'],
+                # The umask must be the umask the file has locally. Not the one 
+                # the remote file has.
+                "umask" : own_items[filename]['umask'],
                 "write_mode" : their_items[filename]['write_mode'],
                 "conditions" : their_items[filename]['conditions'],
                 "md5": their_items[filename]["md5"],
@@ -354,14 +361,20 @@ def sync(output_file=False, force=None):
             try:
                 url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
 
-                error, downloaded_file = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "text")
+                error, downloaded_file = send_request(url, config_cluster["cluster.user"], 
+                            config_cluster["cluster.password"], False, "text")
+
                 if error:
                     error_list.append({'item': item, 'reason': downloaded_file})
                     continue
 
-                # Fix me: wazuh path + file
                 try:
-                    _update_file(item['file']['name'], content=downloaded_file, umask=item['file']['umask'], mtime=item['file']['modification_time'], w_mode=item['file']['write_mode'])
+                    file_path = common.ossec_path + item['file']['name']
+                    _update_file(file_path, content=downloaded_file, 
+                                umask_int=item['file']['umask'], 
+                                mtime=item['file']['modification_time'], 
+                                w_mode=item['file']['write_mode'])
+
                 except Exception as e:
                     error_list.append({'item': item, 'reason': str(e)})
                     continue
@@ -393,7 +406,8 @@ def sync(output_file=False, force=None):
                     for final_item in final_output[key]:
                         f_o.write("\tNode: {0}\n".format(final_item['node']))
                         f_o.write("\t\tFile: {0}\n".format(final_item['file']['name']))
-                        f_o.write("\t\tChecked conditions: {0}\n".format(final_item['checked_conditions']))
+                        f_o.write("\t\tChecked conditions: {0}\n".\
+                                    format(final_item['checked_conditions']))
                 else:
                     for final_item in final_output[key]:
                         f_o.write("\t{0}\n".format(final_item))
