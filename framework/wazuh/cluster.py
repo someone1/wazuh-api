@@ -111,30 +111,31 @@ def get_files(download=None):
     # Expand directory
     expanded_items = []
     for item in CLUSTER_ITEMS:
-        fullpath = common.ossec_path + item["file_name"]
-
+        file_path = item['file_name']
+        
         if item["type"] == "file":
             new_item = dict(item)
-            new_item["fullpath"] = fullpath
+            new_item["path"] = file_path
             expanded_items.append(new_item)
         else:
+            fullpath = common.ossec_path + file_path
             for entry in listdir(fullpath):
                 new_item = dict(item)
-                new_item["fullpath"] = path.join(fullpath, entry)
+                new_item["path"] = path.join(file_path, entry)
                 expanded_items.append(new_item)
 
     final_items = {}
     for new_item in expanded_items:
-
-        if not path.isfile(new_item["fullpath"]):
+        fullpath = common.ossec_path + new_item["path"]
+        if not path.isfile(fullpath):
             continue
 
-        modification_time = str(datetime.utcfromtimestamp(int(path.getmtime(new_item["fullpath"]))))
-        size = path.getsize(new_item["fullpath"])
-        md5_hash = md5(new_item["fullpath"])
+        modification_time = str(datetime.utcfromtimestamp(int(path.getmtime(fullpath))))
+        size = path.getsize(fullpath)
+        md5_hash = md5(fullpath)
 
         file_item = {
-            new_item["fullpath"] : {
+            new_item["path"] : {
                 "umask" : new_item['umask'],
                 "format" : new_item['format'],
                 "write_mode" : new_item['write_mode'],
@@ -146,7 +147,7 @@ def get_files(download=None):
                 }
             }
 
-        if file_download != "" and file_download == new_item["fullpath"]:
+        if file_download != "" and file_download == new_item["path"]:
             return file_item
 
         final_items.update(file_item)
