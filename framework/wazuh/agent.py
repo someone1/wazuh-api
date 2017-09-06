@@ -28,12 +28,21 @@ try:
 except ImportError:
     from urllib.request import urlopen, URLError, HTTPError
 
+def create_exception_dic(id, e):
+    """
+    Creates a dictionary with a list of agent ids and it's error codes.
+    """
+    exception_dic = {}
+    exception_dic['id'] = id
+    exception_dic['error'] = {'message': e.message, 'code': e.code}
+    return exception_dic
+
 class Agent:
     """
     OSSEC Agent object.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, id=None, name=None, ip=None, key=None, force=-1):
         """
         Initialize an agent.
         'id': When the agent exists
@@ -41,50 +50,25 @@ class Agent:
         'name', 'ip' and 'force': Add an agent (generate id and key automatically), removing old agent with same IP if disconnected since <force> seconds.
         'name', 'ip', 'id', 'key': Insert an agent with an existent id and key
         'name', 'ip', 'id', 'key', 'force': Insert an agent with an existent id and key, removing old agent with same IP if disconnected since <force> seconds.
-
-        :param args:   [id | name, ip | name, ip, force | name, ip, id, key | name, ip, id, key, force].
-        :param kwargs: [id | name, ip | name, ip, force | name, ip, id, key | name, ip, id, key, force].
         """
-        self.id = None
-        self.name = None
-        self.ip = None
-        self.internal_key = None
-        self.os = {}
-        self.version = None
-        self.dateAdd = None
+        self.id            = id
+        self.name          = name
+        self.ip            = ip
+        self.internal_key  = key
+        self.os            = {}
+        self.version       = None
+        self.dateAdd       = None
         self.lastKeepAlive = None
-        self.status = None
-        self.key = None
-        self.configSum = None
-        self.mergedSum = None
-        self.group = None
+        self.status        = None
+        self.key           = None
+        self.configSum     = None
+        self.mergedSum     = None
+        self.group         = None
 
-        if args:
-            if len(args) == 1:
-                self.id = args[0]
-            elif len(args) == 2:
-                self._add(name=args[0], ip=args[1])
-            elif len(args) == 3:
-                self._add(name=args[0], ip=args[1], force=args[2])
-            elif len(args) == 4:
-                self._add(name=args[0], ip=args[1], id=args[2], key=args[3])
-            elif len(args) == 5:
-                self._add(name=args[0], ip=args[1], id=args[2], key=args[3], force=args[4])
-            else:
-                raise WazuhException(1700)
-        elif kwargs:
-            if len(kwargs) == 1:
-                self.id = kwargs['id']
-            elif len(kwargs) == 2:
-                self._add(name=kwargs['name'], ip=kwargs['ip'])
-            elif len(kwargs) == 3:
-                self._add(name=kwargs['name'], ip=kwargs['ip'], force=kwargs['force'])
-            elif len(kwargs) == 4:
-                self._add(name=kwargs['name'], ip=kwargs['ip'], id=kwargs['id'], key=kwargs['key'])
-            elif len(kwargs) == 5:
-                self._add(name=kwargs['name'], ip=kwargs['ip'], id=kwargs['id'], key=kwargs['key'], force=kwargs['force'])
-            else:
-                raise WazuhException(1700)
+        # if the method has only been called with an ID parameter, no new agent should be added.
+        # Otherwise, a new agent must be added
+        if name != None and ip != None:
+            self._add(name=name, ip=ip, id=id, key=key, force=force)
 
     def __str__(self):
         return str(self.to_dict())
@@ -218,7 +202,7 @@ class Agent:
         #if self.internal_key:
         #    info['internal_key'] = self.internal_key
         if self.os:
-            os_no_empty = dict((k, v) for k, v in self.os.iteritems() if v)
+            os_no_empty = dict((k, v) for k, v in self.os.items() if v)
             if os_no_empty:
                 info['os'] = os_no_empty
         if self.version:
@@ -414,7 +398,6 @@ class Agent:
         :param force: Remove old agents with same IP if disconnected since <force> seconds
         :return: Agent ID.
         """
-
         manager_status = manager.status()
         if 'ossec-authd' not in manager_status or manager_status['ossec-authd'] != 'running':
             data = self._add_manual(name, ip, id, key, force)
@@ -488,6 +471,18 @@ class Agent:
             raise WazuhException(1709)
 
         force = force if type(force) == int else int(force)
+
+        # Check manager name
+        db_global = glob(common.database_path_global)
+        if not db_global:
+            raise WazuhException(1600)
+
+        conn = Connection(db_global[0])
+        conn.execute("SELECT name FROM agent WHERE (id = 0)")
+        manager_name = str(conn.fetch()[0])
+
+        if name == manager_name:
+            raise WazuhException(1705, name)
 
         # Check if ip, name or id exist in client.keys
         last_id = 0
@@ -655,10 +650,10 @@ class Agent:
             query += ' ORDER BY id ASC'
 
 
-
-        query += ' LIMIT :offset,:limit'
-        request['offset'] = offset
-        request['limit'] = limit
+        if limit:
+            query += ' LIMIT :offset,:limit'
+            request['offset'] = offset
+            request['limit'] = limit
 
         conn.execute(query.format(','.join(select)), request)
 
@@ -691,7 +686,7 @@ class Agent:
                 data_tuple['version'] = tuple[7]
 
             if os:
-                os_no_empty = dict((k, v) for k, v in os.iteritems() if v)
+                os_no_empty = dict((k, v) for k, v in os.items() if v)
                 if os_no_empty:
                     data_tuple['os'] = os_no_empty
 
@@ -828,17 +823,17 @@ class Agent:
             return ret_msg
         else:
             ids = list()
-            if isinstance(agent_id, basestring):
-                try:
-                    Agent(agent_id).restart()
-                except Exception as e:
-                    ids.append(agent_id)
-            else:
+            if isinstance(agent_id, list):
                 for id in agent_id:
                     try:
                         Agent(id).restart()
                     except Exception as e:
-                        ids.append(id)
+                        ids.append(create_exception_dic(id, e))
+            else:
+                try:
+                    Agent(agent_id).restart()
+                except Exception as e:
+                    ids.append(create_exception_dic(agent_id, e))
             if not ids:
                 message = 'All selected agents were restarted'
             else:
@@ -883,18 +878,19 @@ class Agent:
         :param backup: Create backup before removing the agent.
         :return: Message generated by OSSEC.
         """
-        ids = list()
-        if isinstance(agent_id, basestring):
-            try:
-                Agent(agent_id).remove(backup)
-            except Exception as e:
-                ids.append(agent_id)
-        else:
+
+        ids = []
+        if isinstance(agent_id, list):
             for id in agent_id:
                 try:
                     Agent(id).remove(backup)
                 except Exception as e:
-                    ids.append(id)
+                    ids.append(create_exception_dic(id, e))
+        else:
+            try:
+                Agent(agent_id).remove(backup)
+            except Exception as e:
+                ids.append(create_exception_dic(agent_id, e))
 
         if not ids:
             message = 'All selected agents were removed'
@@ -1459,7 +1455,11 @@ class Agent:
         except HTTPError as e:
             raise WazuhException(1713, e.code)
         except URLError as e:
-            raise WazuhException(1713, e.reason)
+            if "SSL23_GET_SERVER_HELLO" in str(e.reason):
+              error = "HTTPS requires Python 2.7.9 or newer. You may also run with Python 3."
+            else:
+              error = str(e.reason)
+            raise WazuhException(1713, error)
 
         lines = result.readlines()
         lines = filter(None, lines)
@@ -1559,7 +1559,11 @@ class Agent:
         except HTTPError as e:
             raise WazuhException(1714, e.code)
         except URLError as e:
-            raise WazuhException(1714, e.reason)
+            if "SSL23_GET_SERVER_HELLO" in str(e.reason):
+              error = "HTTPS requires Python 2.7.9 or newer. You may also run with Python 3."
+            else:
+              error = str(e.reason)
+            raise WazuhException(1714, error)
 
         # Get SHA1 file sum
         sha1hash = sha1(open(wpk_file_path, 'rb').read()).hexdigest()
@@ -1598,7 +1602,7 @@ class Agent:
         s.close()
         if debug:
             print("RESPONSE: {0}".format(data))
-        if data.startswith('err'):
+        if data != 'ok':
             raise WazuhException(1715, data.replace("err ",""))
 
         # Sending file to agent
@@ -1609,7 +1613,7 @@ class Agent:
             print("Sending: {0}".format(common.ossec_path + "/var/upgrade/" + wpk_file))
         try:
             start_time = time()
-            bytes_read = file.read(512)
+            bytes_read = file.read(common.wpk_read_size)
             bytes_read_acum = 0
             while bytes_read:
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1618,9 +1622,9 @@ class Agent:
                 s.send(msg.encode() + bytes_read)
                 data = s.recv(1024).decode()
                 s.close()
-                if data.startswith('err'):
+                if data != 'ok':
                     raise WazuhException(1715, data.replace("err ",""))
-                bytes_read = file.read(512)
+                bytes_read = file.read(common.wpk_read_size)
                 if show_progress:
                     bytes_read_acum = bytes_read_acum + len(bytes_read)
                     show_progress(int(bytes_read_acum * 100 / wpk_file_size) + (bytes_read_acum * 100 % wpk_file_size > 0))
@@ -1639,7 +1643,7 @@ class Agent:
         s.close()
         if debug:
             print("RESPONSE: {0}".format(data))
-        if data.startswith('err'):
+        if data != 'ok':
             raise WazuhException(1715, data.replace("err ",""))
 
         # Get file SHA1 from agent and compare
@@ -1653,6 +1657,8 @@ class Agent:
         s.close()
         if debug:
             print("RESPONSE: {0}".format(data))
+        if not data.startswith('ok '):
+            raise WazuhException(1715, data.replace("err ",""))
         rcv_sha1 = data.split(' ')[1]
         if rcv_sha1 == file_sha1:
             return ["WPK file sent", wpk_file]
@@ -1731,7 +1737,7 @@ class Agent:
         return Agent(agent_id).upgrade(wpk_repo=wpk_repo, version=version, force=True if int(force)==1 else False)
 
 
-    def upgrade_result(self, debug=False, timeout=60):
+    def upgrade_result(self, debug=False, timeout=common.upgrade_result_retries):
         """
         Read upgrade result output from agent.
         """
@@ -1749,7 +1755,7 @@ class Agent:
             print("RESPONSE: {0}".format(data))
         counter = 0
         while data.startswith('err') and counter < timeout:
-            sleep(1)
+            sleep(common.upgrade_result_sleep)
             counter = counter + 1
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(common.ossec_path + "/queue/ossec/request")
@@ -1810,7 +1816,7 @@ class Agent:
         s.close()
         if debug:
             print("RESPONSE: {0}".format(data))
-        if data.startswith('err'):
+        if data != 'ok':
             raise WazuhException(1715, data.replace("err ",""))
 
         # Sending file to agent
@@ -1819,7 +1825,7 @@ class Agent:
             raise WazuhException(1715, data.replace("err ",""))
         try:
             start_time = time()
-            bytes_read = file.read(512)
+            bytes_read = file.read(common.wpk_read_size)
             file_sha1=sha1(bytes_read)
             bytes_read_acum = 0
             while bytes_read:
@@ -1829,7 +1835,7 @@ class Agent:
                 s.send(msg.encode() + bytes_read)
                 data = s.recv(1024).decode()
                 s.close()
-                bytes_read = file.read(512)
+                bytes_read = file.read(common.wpk_read_size)
                 file_sha1.update(bytes_read)
                 if show_progress:
                     bytes_read_acum = bytes_read_acum + len(bytes_read)
@@ -1852,7 +1858,7 @@ class Agent:
         s.close()
         if debug:
             print("RESPONSE: {0}".format(data))
-        if data.startswith('err'):
+        if data != 'ok':
             raise WazuhException(1715, data.replace("err ",""))
 
         # Get file SHA1 from agent and compare
@@ -1866,6 +1872,8 @@ class Agent:
         s.close()
         if debug:
             print("RESPONSE: {0}".format(data))
+        if not data.startswith('ok '):
+            raise WazuhException(1715, data.replace("err ",""))
         rcv_sha1 = data.split(' ')[1]
         if calc_sha1 == rcv_sha1:
             return ["WPK file sent", wpk_file]
