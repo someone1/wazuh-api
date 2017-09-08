@@ -10,6 +10,7 @@ from datetime import datetime
 from hashlib import sha512
 from time import time, mktime
 from os import path, listdir, rename, utime, environ, umask
+from subprocess import check_output
 
 
 CLUSTER_ITEMS = [
@@ -70,14 +71,20 @@ def get_nodes():
     if not config_cluster:
         raise WazuhException(3000, "No config found")
 
-    # Add localhost as node
-    data = [{'url':'localhost', 'node':config_cluster['cluster.node'], 
-             'status':'connected', 'cluster':config_cluster['cluster.name']}]
+    # list with all the ips the localhost has
+    localhost_ips = check_output(['hostname', '--all-ip-addresses']).split(" ")[:-1]
+    data = []
 
     for url in config_cluster["cluster.nodes"]:
-        req_url = '{0}{1}'.format(url, "/cluster/node")
-        error, response = send_request(req_url, config_cluster["cluster.user"], 
-                            config_cluster["cluster.password"], False, "json")
+        # Split http(s)://x.x.x.x:55000 in just x.x.x.x
+        if not url.split(':')[1][2:] in localhost_ips:
+            req_url = '{0}{1}'.format(url, "/cluster/node")
+            error, response = send_request(req_url, config_cluster["cluster.user"], 
+                                config_cluster["cluster.password"], False, "json")
+        else:
+            error = 0
+            url = "localhost:55000"
+            response = {'data': get_node()}
 
         if error:
             data.append({'error': response, 'status':'disconnected'})
