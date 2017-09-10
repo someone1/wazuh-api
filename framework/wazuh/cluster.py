@@ -210,6 +210,183 @@ def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
         rename(f_temp, fullpath)
 
 
+def _get_download_files_list(node, config_cluster, local_files, own_items, force):
+    # local_files -> set
+    download_list, discard_list = [], []
+
+    # Get remote token
+    url = '{0}{1}'.format(node, "/cluster/node/token")
+    error, response = send_request(url, config_cluster["cluster.user"], 
+                          config_cluster["cluster.password"], False, "json")
+
+    if error:
+        raise WazuhException(3000, "Error in node {0}: {1}".format(node, response))
+
+    remote_node_token = response['data']
+    if not _check_token(remote_node_token):
+        raise WazuhException(3000, "Error in node {0}: Invalid cluster token".format(node))
+
+    # Get remote files
+    url = '{0}{1}'.format(node, "/cluster/node/files")
+    error, response = send_request(url, config_cluster["cluster.user"], 
+                          config_cluster["cluster.password"], False, "json")
+
+    if error:
+        raise WazuhException(3000, "Error in node {0}: {1}".format(node, response))
+
+    their_items = response["data"]
+    remote_files = set(response['data'].keys())
+
+    # Set of files
+    missing_files_locally = remote_files - local_files
+    missing_files_remotely =  local_files - remote_files
+    shared_files = local_files.intersection(remote_files)
+
+    # Shared files
+    for filename in shared_files:
+        local_file_time = datetime.strptime(own_items[filename]["modification_time"], 
+                                            "%Y-%m-%d %H:%M:%S")
+        local_file_size = own_items[filename]["size"]
+        local_file = {
+            "name": filename,
+            "umask" : own_items[filename]['umask'],
+            "write_mode" : own_items[filename]['write_mode'],
+            "conditions" : own_items[filename]['conditions'],
+            "md5": own_items[filename]["md5"],
+            "modification_time": own_items[filename]["modification_time"],
+            "size" : own_items[filename]['size']
+        }
+
+        remote_file_time = datetime.strptime(their_items[filename]["modification_time"], 
+                                            "%Y-%m-%d %H:%M:%S")
+        remote_file_size = their_items[filename]["size"]
+        remote_file = {
+            "name": filename,
+            # The umask must be the umask the file has locally. Not the one 
+            # the remote file has.
+            "umask" : own_items[filename]['umask'],
+            "write_mode" : their_items[filename]['write_mode'],
+            "conditions" : their_items[filename]['conditions'],
+            "md5": their_items[filename]["md5"],
+            "modification_time": their_items[filename]["modification_time"],
+            "size": their_items[filename]["size"]
+        }
+
+
+        checked_conditions = []
+        conditions = {}
+
+        if not force:
+            if remote_file["conditions"]["different_md5"]:
+                checked_conditions.append("different_md5")
+                if remote_file["md5"] != local_file["md5"]:
+                    conditions["different_md5"] = True
+                else:
+                    conditions["different_md5"] = False
+
+            if remote_file["conditions"]["higher_remote_time"]:
+                checked_conditions.append("higher_remote_time")
+                if remote_file_time > local_file_time:
+                    conditions["higher_remote_time"] = True
+                else:
+                    conditions["higher_remote_time"] = False
+
+            if remote_file["conditions"]["larger_remote_size"]:
+                checked_conditions.append("larger_remote_size")
+                if remote_file_size > local_file_size:
+                    conditions["larger_remote_size"] = True
+                else:
+                    conditions["larger_remote_size"] = False
+        else:
+            conditions["force"] = True
+
+        check_item = {
+            "file": remote_file,
+            "checked_conditions": conditions,
+            "updated": False,
+            "node": node
+        }
+
+        all_conds = 0
+        for checked_condition in checked_conditions:
+            if conditions[checked_condition]:
+                all_conds += 1
+            else:
+                break
+
+        if all_conds == len(checked_conditions):
+            download_list.append(check_item)
+        else:
+            discard_list.append(check_item)
+
+    # Missing files
+    for filename in missing_files_locally:
+
+        remote_file = {
+            "name": filename,
+            "umask" : their_items[filename]['umask'],
+            "write_mode" : their_items[filename]['write_mode'],
+            "conditions" : their_items[filename]['conditions'],
+            "md5": their_items[filename]["md5"],
+            "modification_time": their_items[filename]["modification_time"],
+            "size": their_items[filename]["size"]
+        }
+
+        remote_item = {
+            "file": remote_file,
+            "checked_conditions": { "missing": True},
+            "updated": False,
+            "node": node
+        }
+
+        download_list.append(remote_item)
+
+    return download_list, discard_list
+
+
+def _download(node, config_cluster, local_files, own_items, force):
+    error_list, sychronize_list = [], []
+
+    try:
+        download_list, local_discard_list = _get_download_files_list(node, 
+                    config_cluster, set(local_files), own_items, force)
+    except Exception as e:
+        raise e
+
+    # Download
+    for item in download_list:
+        try:
+            url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
+
+            error, downloaded_file = send_request(url, config_cluster["cluster.user"], 
+            config_cluster["cluster.password"], False, "text")
+
+            if error:
+                error_list.append({'item': item, 'reason': downloaded_file})
+                raise WazuhException(3000, "Error: {1}".format(downloaded_file))
+
+            try:
+                file_path = common.ossec_path + item['file']['name']
+                _update_file(file_path, content=downloaded_file, 
+                umask_int=item['file']['umask'], 
+                mtime=item['file']['modification_time'], 
+                w_mode=item['file']['write_mode'])
+
+            except Exception as e:
+                error_list.append({'item': item, 'reason': str(e)})
+                raise e
+
+        except Exception as e:
+            error_list.append({'item': item, 'reason': str(e)})
+            raise e
+
+
+        item["updated"] = True
+        sychronize_list.append(item)
+
+    return error_list, sychronize_list, local_discard_list
+
+
 def sync(output_file=False, force=None):
     """
     Sync this node with others
@@ -233,168 +410,9 @@ def sync(output_file=False, force=None):
 
     for node in config_cluster["cluster.nodes"]:
         if not node.split(':')[1][2:] in localhost_ips:
-            download_list = []
-
-            # Get remote token
-            url = '{0}{1}'.format(node, "/cluster/node/token")
-            error, response = send_request(url, config_cluster["cluster.user"], 
-                                  config_cluster["cluster.password"], False, "json")
-
-            if error:
-                error_list.append({'node': node, 'error': response})
-                continue
-
-            remote_node_token = response['data']
-            if not _check_token(remote_node_token):
-                error_list.append({'node': node, 'error': "Invalid cluster token"})
-                continue
-
-            # Get remote files
-            url = '{0}{1}'.format(node, "/cluster/node/files")
-            error, response = send_request(url, config_cluster["cluster.user"], 
-                                  config_cluster["cluster.password"], False, "json")
-
-            if error:
-                error_list.append({'node': node, 'error': response})
-                continue
-
-            their_items = response["data"]
-            remote_files = response['data'].keys()
-
-            # Set of files
-            missing_files_locally = set(remote_files) - set(local_files)
-            missing_files_remotely =  set(local_files) - set(remote_files)
-            shared_files = set(local_files).intersection(remote_files)
-
-            # Shared files
-            for filename in shared_files:
-                local_file_time = datetime.strptime(own_items[filename]["modification_time"], 
-                                                    "%Y-%m-%d %H:%M:%S")
-                local_file_size = own_items[filename]["size"]
-                local_file = {
-                    "name": filename,
-                    "umask" : own_items[filename]['umask'],
-                    "write_mode" : own_items[filename]['write_mode'],
-                    "conditions" : own_items[filename]['conditions'],
-                    "md5": own_items[filename]["md5"],
-                    "modification_time": own_items[filename]["modification_time"],
-                    "size" : own_items[filename]['size']
-                }
-
-                remote_file_time = datetime.strptime(their_items[filename]["modification_time"], 
-                                                    "%Y-%m-%d %H:%M:%S")
-                remote_file_size = their_items[filename]["size"]
-                remote_file = {
-                    "name": filename,
-                    # The umask must be the umask the file has locally. Not the one 
-                    # the remote file has.
-                    "umask" : own_items[filename]['umask'],
-                    "write_mode" : their_items[filename]['write_mode'],
-                    "conditions" : their_items[filename]['conditions'],
-                    "md5": their_items[filename]["md5"],
-                    "modification_time": their_items[filename]["modification_time"],
-                    "size": their_items[filename]["size"]
-                }
-
-
-                checked_conditions = []
-                conditions = {}
-
-                if not force:
-                    if remote_file["conditions"]["different_md5"]:
-                        checked_conditions.append("different_md5")
-                        if remote_file["md5"] != local_file["md5"]:
-                            conditions["different_md5"] = True
-                        else:
-                            conditions["different_md5"] = False
-
-                    if remote_file["conditions"]["higher_remote_time"]:
-                        checked_conditions.append("higher_remote_time")
-                        if remote_file_time > local_file_time:
-                            conditions["higher_remote_time"] = True
-                        else:
-                            conditions["higher_remote_time"] = False
-
-                    if remote_file["conditions"]["larger_remote_size"]:
-                        checked_conditions.append("larger_remote_size")
-                        if remote_file_size > local_file_size:
-                            conditions["larger_remote_size"] = True
-                        else:
-                            conditions["larger_remote_size"] = False
-                else:
-                    conditions["force"] = True
-
-                check_item = {
-                    "file": remote_file,
-                    "checked_conditions": conditions,
-                    "updated": False,
-                    "node": node
-                }
-
-                all_conds = 0
-                for checked_condition in checked_conditions:
-                    if conditions[checked_condition]:
-                        all_conds += 1
-                    else:
-                        break
-
-                if all_conds == len(checked_conditions):
-                    download_list.append(check_item)
-                else:
-                    discard_list.append(check_item)
-
-            # Missing files
-            for filename in missing_files_locally:
-
-                remote_file = {
-                    "name": filename,
-                    "umask" : their_items[filename]['umask'],
-                    "write_mode" : their_items[filename]['write_mode'],
-                    "conditions" : their_items[filename]['conditions'],
-                    "md5": their_items[filename]["md5"],
-                    "modification_time": their_items[filename]["modification_time"],
-                    "size": their_items[filename]["size"]
-                }
-
-                remote_item = {
-                    "file": remote_file,
-                    "checked_conditions": { "missing": True},
-                    "updated": False,
-                    "node": node
-                }
-
-                download_list.append(remote_item)
-
-            # Download
-            for item in download_list:
-                try:
-                    url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
-
-                    error, downloaded_file = send_request(url, config_cluster["cluster.user"], 
-                                config_cluster["cluster.password"], False, "text")
-
-                    if error:
-                        error_list.append({'item': item, 'reason': downloaded_file})
-                        continue
-
-                    try:
-                        file_path = common.ossec_path + item['file']['name']
-                        _update_file(file_path, content=downloaded_file, 
-                                    umask_int=item['file']['umask'], 
-                                    mtime=item['file']['modification_time'], 
-                                    w_mode=item['file']['write_mode'])
-
-                    except Exception as e:
-                        error_list.append({'item': item, 'reason': str(e)})
-                        continue
-
-                except Exception as e:
-                    error_list.append({'item': item, 'reason': str(e)})
-                    continue
-
-
-                item["updated"] = True
-                sychronize_list.append(item)
+            local_error_list, local_synchronize_list,\
+                local_discard_list = _download(node, config_cluster, 
+                    set(local_files), own_items, force)
 
     #print check_list
     final_output = {
