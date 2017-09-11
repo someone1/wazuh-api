@@ -85,7 +85,7 @@ def get_nodes():
                                 config_cluster["cluster.password"], False, "json")
         else:
             error = 0
-            url = "localhost:55000"
+            url = "localhost"
             response = {'data': get_node()}
 
         if error:
@@ -344,12 +344,12 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
     return download_list, discard_list
 
 
-def _download(node, config_cluster, local_files, own_items, force):
+def _download_and_update(node, config_cluster, local_files, own_items, force):
     error_list, sychronize_list = [], []
 
     try:
         download_list, local_discard_list = _get_download_files_list(node, 
-                    config_cluster, set(local_files), own_items, force)
+                    config_cluster, local_files, own_items, force)
     except Exception as e:
         raise e
 
@@ -405,14 +405,17 @@ def sync(output_file=False, force=None):
     own_items = get_files()
     local_files = own_items.keys()
 
-    # Get localhost ips
-    localhost_ips = get_localhost_ips()
+    # Get cluster nodes
+    cluster = map(lambda x: x['url'], get_nodes()['items'])
 
-    for node in config_cluster["cluster.nodes"]:
-        if not node.split(':')[1][2:] in localhost_ips:
+    for node in cluster:
+        if node != 'localhost':
             local_error_list, local_synchronize_list,\
-                local_discard_list = _download(node, config_cluster, 
+                local_discard_list = _download_and_update(node, config_cluster, 
                     set(local_files), own_items, force)
+            error_list.append(local_error_list)
+            sychronize_list.append(local_synchronize_list)
+            discard_list.append(local_discard_list)
 
     #print check_list
     final_output = {
