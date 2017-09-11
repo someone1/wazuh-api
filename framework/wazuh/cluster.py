@@ -11,6 +11,7 @@ from hashlib import sha512
 from time import time, mktime
 from os import path, listdir, rename, utime, environ, umask
 from subprocess import check_output
+import requests
 
 
 CLUSTER_ITEMS = [
@@ -68,7 +69,7 @@ def read_config():
 
 get_localhost_ips = lambda: check_output(['hostname', '--all-ip-addresses']).split(" ")[:-1]
 
-def get_nodes():
+def get_nodes(session=requests.Session()):
     config_cluster = read_config()
     if not config_cluster:
         raise WazuhException(3000, "No config found")
@@ -82,14 +83,14 @@ def get_nodes():
         if not url.split(':')[1][2:] in localhost_ips:
             req_url = '{0}{1}'.format(url, "/cluster/node")
             error, response = send_request(req_url, config_cluster["cluster.user"], 
-                                config_cluster["cluster.password"], False, "json")
+                                config_cluster["cluster.password"], False, "json",session)
         else:
             error = 0
             url = "localhost"
             response = {'data': get_node()}
 
         if error:
-            data.append({'error': response, 'status':'disconnected'})
+            data.append({'error': response, 'status':'disconnected', 'url':url})
             continue
 
         data.append({'url':url, 'node':response['data']['node'], 
@@ -210,14 +211,14 @@ def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
         rename(f_temp, fullpath)
 
 
-def _get_download_files_list(node, config_cluster, local_files, own_items, force):
+def _get_download_files_list(node, config_cluster, local_files, own_items, force, session):
     # local_files -> set
     download_list, discard_list = [], []
 
     # Get remote token
     url = '{0}{1}'.format(node, "/cluster/node/token")
     error, response = send_request(url, config_cluster["cluster.user"], 
-                          config_cluster["cluster.password"], False, "json")
+                          config_cluster["cluster.password"], False, "json", session)
 
     if error:
         raise WazuhException(3000, "Error in node {0}: {1}".format(node, response))
@@ -229,7 +230,7 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
     # Get remote files
     url = '{0}{1}'.format(node, "/cluster/node/files")
     error, response = send_request(url, config_cluster["cluster.user"], 
-                          config_cluster["cluster.password"], False, "json")
+                          config_cluster["cluster.password"], False, "json", session)
 
     if error:
         raise WazuhException(3000, "Error in node {0}: {1}".format(node, response))
@@ -344,12 +345,13 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
     return download_list, discard_list
 
 
-def _download_and_update(node, config_cluster, local_files, own_items, force):
+def _download_and_update(node, config_cluster, local_files, own_items, force, session):
+
     error_list, sychronize_list = [], []
 
     try:
         download_list, local_discard_list = _get_download_files_list(node, 
-                    config_cluster, local_files, own_items, force)
+                    config_cluster, local_files, own_items, force, session)
     except Exception as e:
         raise e
 
@@ -359,7 +361,7 @@ def _download_and_update(node, config_cluster, local_files, own_items, force):
             url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
 
             error, downloaded_file = send_request(url, config_cluster["cluster.user"], 
-            config_cluster["cluster.password"], False, "text")
+            config_cluster["cluster.password"], False, "text", session)
 
             if error:
                 error_list.append({'item': item, 'reason': downloaded_file})
@@ -392,6 +394,8 @@ def sync(output_file=False, force=None):
     Sync this node with others
     :return: Files synced.
     """
+    session = requests.Session()
+
     discard_list = []
     sychronize_list = []
     error_list = []
@@ -406,13 +410,13 @@ def sync(output_file=False, force=None):
     local_files = own_items.keys()
 
     # Get cluster nodes
-    cluster = map(lambda x: x['url'], get_nodes()['items'])
+    cluster = map(lambda x: x['url'], get_nodes(session)['items'])
 
     for node in cluster:
         if node != 'localhost':
             local_error_list, local_synchronize_list,\
                 local_discard_list = _download_and_update(node, config_cluster, 
-                    set(local_files), own_items, force)
+                    set(local_files), own_items, force, session)
             error_list.append(local_error_list)
             sychronize_list.append(local_synchronize_list)
             discard_list.append(local_discard_list)
