@@ -332,12 +332,13 @@ def md5(fname):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def send_request(url, user, password, verify, type):
-    auth = requests.auth.HTTPBasicAuth(user, password)
+def send_request(url, user, password, verify, type, session=requests.Session()):
+    session.auth = (user, password)
+    # auth = requests.auth.HTTPBasicAuth(user, password)
 
     error = 0
     try:
-        r = requests.get(url, auth=auth, params=None, timeout=2, verify=verify)
+        r = session.get(url, verify=verify)
         if r.status_code == 401:
               data = str(r.text)
               error = 401
@@ -365,3 +366,4 @@ def send_request(url, user, password, verify, type):
             data = r.text
 
     return (error, data)
+
