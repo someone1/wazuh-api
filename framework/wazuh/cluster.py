@@ -46,9 +46,9 @@ def read_config():
     # Get api/configuration/config.js content
     try:
         with open(common.api_config_path) as api_config_file:
-            lines = filter(lambda x: x.startswith('config.cluster.'), 
+            lines = filter(lambda x: x.startswith('config.cluster.'),
                            api_config_file.readlines())
-        
+
         name_vars = map(lambda x: x.partition("=")[::2], lines)
         config_cluster = {name.strip().split('config.')[1]:
                           var.replace("\n","").replace("]","").replace("[","").\
@@ -60,7 +60,7 @@ def read_config():
             config_cluster['cluster.nodes'] = [node.strip() for node in all_nodes]
         else:
             config_cluster["cluster.nodes"] = []
-            
+
     except Exception as e:
         raise WazuhException(3000, str(e))
 
@@ -82,7 +82,7 @@ def get_nodes(session=requests.Session()):
         # Split http(s)://x.x.x.x:55000 in just x.x.x.x
         if not url.split(':')[1][2:] in localhost_ips:
             req_url = '{0}{1}'.format(url, "/cluster/node")
-            error, response = send_request(req_url, config_cluster["cluster.user"], 
+            error, response = send_request(req_url, config_cluster["cluster.user"],
                                 config_cluster["cluster.password"], False, "json",session)
         else:
             error = 0
@@ -93,7 +93,7 @@ def get_nodes(session=requests.Session()):
             data.append({'error': response, 'status':'disconnected', 'url':url})
             continue
 
-        data.append({'url':url, 'node':response['data']['node'], 
+        data.append({'url':url, 'node':response['data']['node'],
                      'status':'connected', 'cluster':response['data']['cluster']})
 
     return {'items': data, 'totalItems': len(data)}
@@ -122,7 +122,7 @@ def get_files(download=None):
     expanded_items = []
     for item in CLUSTER_ITEMS:
         file_path = item['file_name']
-        
+
         if item["type"] == "file":
             new_item = dict(item)
             new_item["path"] = file_path
@@ -213,27 +213,30 @@ def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
 
 def _get_download_files_list(node, config_cluster, local_files, own_items, force, session):
     # local_files -> set
-    download_list, discard_list = [], []
+    download_list, discard_list, error_list = [], [], []
 
     # Get remote token
     url = '{0}{1}'.format(node, "/cluster/node/token")
-    error, response = send_request(url, config_cluster["cluster.user"], 
+    error, response = send_request(url, config_cluster["cluster.user"],
                           config_cluster["cluster.password"], False, "json", session)
 
     if error:
-        raise WazuhException(3000, "Error in node {0}: {1}".format(node, response))
+        error_list.append({'node': node, 'error': response})
+        return download_list, discard_list, error_list
 
     remote_node_token = response['data']
     if not _check_token(remote_node_token):
-        raise WazuhException(3000, "Error in node {0}: Invalid cluster token".format(node))
+        error_list.append({'node': node, 'error': "Invalid cluster token"})
+        return download_list, discard_list, error_list
 
     # Get remote files
     url = '{0}{1}'.format(node, "/cluster/node/files")
-    error, response = send_request(url, config_cluster["cluster.user"], 
+    error, response = send_request(url, config_cluster["cluster.user"],
                           config_cluster["cluster.password"], False, "json", session)
 
     if error:
-        raise WazuhException(3000, "Error in node {0}: {1}".format(node, response))
+        error_list.append({'node': node, 'error': response})
+        return download_list, discard_list, error_list
 
     their_items = response["data"]
     remote_files = set(response['data'].keys())
@@ -245,7 +248,7 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
 
     # Shared files
     for filename in shared_files:
-        local_file_time = datetime.strptime(own_items[filename]["modification_time"], 
+        local_file_time = datetime.strptime(own_items[filename]["modification_time"],
                                             "%Y-%m-%d %H:%M:%S")
         local_file_size = own_items[filename]["size"]
         local_file = {
@@ -258,12 +261,12 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
             "size" : own_items[filename]['size']
         }
 
-        remote_file_time = datetime.strptime(their_items[filename]["modification_time"], 
+        remote_file_time = datetime.strptime(their_items[filename]["modification_time"],
                                             "%Y-%m-%d %H:%M:%S")
         remote_file_size = their_items[filename]["size"]
         remote_file = {
             "name": filename,
-            # The umask must be the umask the file has locally. Not the one 
+            # The umask must be the umask the file has locally. Not the one
             # the remote file has.
             "umask" : own_items[filename]['umask'],
             "write_mode" : their_items[filename]['write_mode'],
@@ -342,45 +345,48 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
 
         download_list.append(remote_item)
 
-    return download_list, discard_list
+    return download_list, discard_list, error_list
 
 
 def _download_and_update(node, config_cluster, local_files, own_items, force, session):
 
     error_list, sychronize_list = [], []
 
+    print "+++ \tdownload list"
     try:
-        download_list, local_discard_list = _get_download_files_list(node, 
-                    config_cluster, local_files, own_items, force, session)
+        download_list, local_discard_list, error_list = _get_download_files_list(node, config_cluster, local_files, own_items, force, session)
     except Exception as e:
         raise e
+    print "+++ \tdownload list   ---"
 
     # Download
     for item in download_list:
+        print "+++ \tfile: {0}".format(item['file']['name'])
         try:
             url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
 
-            error, downloaded_file = send_request(url, config_cluster["cluster.user"], 
+            print "+++ \t\tDownload"
+            error, downloaded_file = send_request(url, config_cluster["cluster.user"],
             config_cluster["cluster.password"], False, "text", session)
 
             if error:
                 error_list.append({'item': item, 'reason': downloaded_file})
-                raise WazuhException(3000, "Error: {1}".format(downloaded_file))
+                continue
 
             try:
                 file_path = common.ossec_path + item['file']['name']
-                _update_file(file_path, content=downloaded_file, 
-                umask_int=item['file']['umask'], 
-                mtime=item['file']['modification_time'], 
+                _update_file(file_path, content=downloaded_file,
+                umask_int=item['file']['umask'],
+                mtime=item['file']['modification_time'],
                 w_mode=item['file']['write_mode'])
 
             except Exception as e:
                 error_list.append({'item': item, 'reason': str(e)})
-                raise e
+                continue
 
         except Exception as e:
             error_list.append({'item': item, 'reason': str(e)})
-            raise e
+            continue
 
 
         item["updated"] = True
@@ -414,9 +420,8 @@ def sync(output_file=False, force=None):
 
     for node in cluster:
         if node != 'localhost':
-            local_error_list, local_synchronize_list,\
-                local_discard_list = _download_and_update(node, config_cluster, 
-                    set(local_files), own_items, force, session)
+            print "+++ node: {0}".format(node)
+            local_error_list, local_synchronize_list, local_discard_list = _download_and_update(node, config_cluster, set(local_files), own_items, force, session)
             error_list.extend(local_error_list)
             sychronize_list.extend(local_synchronize_list)
             discard_list.extend(local_discard_list)
@@ -454,3 +459,4 @@ def sync(output_file=False, force=None):
         f_o.close()
 
     return final_output
+
