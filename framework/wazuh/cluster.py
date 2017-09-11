@@ -417,16 +417,18 @@ def sync(output_file=False, force=None):
             local_error_list, local_synchronize_list,\
                 local_discard_list = _download_and_update(node, config_cluster, 
                     set(local_files), own_items, force, session)
-            error_list.append(local_error_list)
-            sychronize_list.append(local_synchronize_list)
-            discard_list.append(local_discard_list)
+            error_list.extend(local_error_list)
+            sychronize_list.extend(local_synchronize_list)
+            discard_list.extend(local_discard_list)
 
     #print check_list
     final_output = {
-        'discard': discard_list,
+        'discard': len(discard_list),
         'error': error_list,
-        'updated': sychronize_list
+        'updated': len(sychronize_list),
+        'files_updated': sychronize_list
     }
+
 
     if output_file:
         f_o = open("{0}/logs/cluster.log".format(common.ossec_path), "a+")
