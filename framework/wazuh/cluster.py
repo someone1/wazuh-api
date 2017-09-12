@@ -16,6 +16,7 @@ import requests
 from multiprocessing import Pool
 from contextlib import contextmanager
 import os
+from shutil import rmtree
 
 CLUSTER_ITEMS = [
     {
@@ -375,15 +376,23 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
 
 def extract_files(path_zip_file, down_list):
 
+    if os.path.exists("/var/ossec/stats/downloaded.zip"):
+        os.remove("/var/ossec/stats/downloaded.zip")
+
     f_out = open("/var/ossec/stats/downloaded.zip", 'w')
     f_out.write(path_zip_file)
     f_out.close()
+
+    if os.path.exists("/var/ossec/stats/downloaded_dir"):
+        rmtree("/var/ossec/stats/downloaded_dir")
 
     zip_ref = zipfile.ZipFile("/var/ossec/stats/downloaded.zip", 'r')
     zip_ref.extractall("/var/ossec/stats/downloaded_dir")
     zip_ref.close()
 
     # /var/ossec/stats/downloaded_dir/var/
+
+
     extracted_list = []
     for root, directories, filenames in os.walk("/var/ossec/stats/downloaded_dir"):
         for filename in filenames:
