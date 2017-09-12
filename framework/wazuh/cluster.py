@@ -420,7 +420,7 @@ def _download_and_update(node, config_cluster, local_files, own_items, force, se
     for item in download_list:
         filenames_list.append(item["file"]["name"])
 
-    request_args = { "list_path": filenames_list, "node_orig": "yo"}
+    request_args = { "list_path": filenames_list, "node_orig": config_cluster['cluster.node']}
 
     try:
         url = '{0}{1}'.format(node, "/cluster/node/zip")
