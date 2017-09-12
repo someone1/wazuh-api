@@ -12,7 +12,8 @@ from time import time, mktime
 from os import path, listdir, rename, utime, environ, umask
 from subprocess import check_output
 import requests
-
+from multiprocessing import Pool
+from contextlib import contextmanager
 
 CLUSTER_ITEMS = [
     {
@@ -198,8 +199,8 @@ def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
     dest_file = open(f_temp, "w")
     dest_file.write(content)
 
-    if umask_int:
-        umask(umask_int)
+    # if umask_int:
+    #     umask(umask_int)
 
     dest_file.close()
 
@@ -350,22 +351,20 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
 
 def _download_and_update(node, config_cluster, local_files, own_items, force, session):
 
-    error_list, sychronize_list = [], []
+    error_list, sychronize_list, local_discard_list = [], [], []
 
-    print "+++ \tdownload list"
     try:
         download_list, local_discard_list, error_list = _get_download_files_list(node, config_cluster, local_files, own_items, force, session)
     except Exception as e:
-        raise e
-    print "+++ \tdownload list   ---"
+        error_list.append({'node': node, 'error': str(e)})
+        return error_list, sychronize_list, local_discard_list
 
     # Download
     for item in download_list:
-        print "+++ \tfile: {0}".format(item['file']['name'])
+        #print "+++ \tnode: {0} file: {1}".format(node, item['file']['name'])
         try:
             url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
 
-            print "+++ \t\tDownload"
             error, downloaded_file = send_request(url, config_cluster["cluster.user"],
             config_cluster["cluster.password"], False, "text", session)
 
@@ -395,6 +394,16 @@ def _download_and_update(node, config_cluster, local_files, own_items, force, se
     return error_list, sychronize_list, local_discard_list
 
 
+def _download_and_update_wrapper(args):
+    return _download_and_update(*args)
+
+@contextmanager
+def terminating(thing):
+    try:
+        yield thing
+    finally:
+        thing.terminate()
+
 def sync(output_file=False, force=None):
     """
     Sync this node with others
@@ -416,22 +425,22 @@ def sync(output_file=False, force=None):
     local_files = own_items.keys()
 
     # Get cluster nodes
-    cluster = map(lambda x: x['url'], get_nodes(session)['items'])
+    cluster = filter(lambda x: x != 'localhost', map(lambda x: x['url'], get_nodes(session)['items']))
+    cluster_tuple = map(lambda x: (x, config_cluster, set(local_files), own_items, force, session), cluster)
 
-    for node in cluster:
-        if node != 'localhost':
-            print "+++ node: {0}".format(node)
-            local_error_list, local_synchronize_list, local_discard_list = _download_and_update(node, config_cluster, set(local_files), own_items, force, session)
-            error_list.extend(local_error_list)
-            sychronize_list.extend(local_synchronize_list)
-            discard_list.extend(local_discard_list)
+    # for node in cluster:
+    with terminating(Pool(10)) as p:
+        for lerrorl, lsynchronizel, ldiscardl in p.imap(_download_and_update_wrapper, cluster_tuple):
+            error_list.extend(lerrorl)
+            sychronize_list.extend(lsynchronizel)
+            discard_list.extend(ldiscardl)
+
 
     #print check_list
     final_output = {
         'discard': len(discard_list),
         'error': error_list,
-        'updated': len(sychronize_list),
-        'files_updated': sychronize_list
+        'updated': len(sychronize_list)
     }
 
 
@@ -459,4 +468,3 @@ def sync(output_file=False, force=None):
         f_o.close()
 
     return final_output
-

@@ -84,7 +84,7 @@ exports.send_file = function(req, res, file_name, type){
                   var files = Object.keys(data.data);
                   var file_name = files[0];
                   var fileformat = data.data[file_name]["format"];
-                  var wazuhpath = ""; // fix me
+                  var wazuhpath = "/var/ossec"; // fix me
               } catch (e) {
                   json_res = {'error': 700, 'message': errors.description(700) + ": " + file_name};
                   send_aux(req, res, json_res, 404);
