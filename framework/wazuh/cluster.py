@@ -9,6 +9,7 @@ from wazuh import common
 from datetime import datetime
 from hashlib import sha512
 from time import time, mktime
+import time
 from os import path, listdir, rename, utime, environ, umask
 from subprocess import check_output
 import requests
@@ -42,6 +43,30 @@ CLUSTER_ITEMS = [
     }
     # {"file_name":"/etc/ossec.conf", "format":"xml"},
 ]
+
+import zipfile
+
+try:
+    import zlib
+    compression = zipfile.ZIP_DEFLATED
+except:
+    compression = zipfile.ZIP_STORED
+
+
+def compress_files(list_path, node_orig):
+
+    zip_name = '/var/ossec/stats/api_cluster_{0}_{1}.zip'.format(node_orig, time.strftime("%Y-%m-%d_%H-%M-%S"))
+
+    modes = { zipfile.ZIP_DEFLATED: 'deflated', zipfile.ZIP_STORED: 'stored' }
+
+    zf = zipfile.ZipFile(zip_name, mode='w')
+    try:
+        for f in list_path:
+            zf.write(f, compress_type=compression)
+    finally:
+        zf.close()
+
+    return zip_name
 
 def read_config():
     # Get api/configuration/config.js content
@@ -115,10 +140,7 @@ def get_node(name=None):
     return data
 
 
-def get_files(download=None):
-
-    file_download = download
-
+def get_files():
     # Expand directory
     expanded_items = []
     for item in CLUSTER_ITEMS:
@@ -158,9 +180,6 @@ def get_files(download=None):
                 }
             }
 
-        if file_download != "" and file_download == new_item["path"]:
-            return file_item
-
         final_items.update(file_item)
 
     return final_items
@@ -187,6 +206,10 @@ def _check_token(other_token):
 
 def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
 
+    l_file = open(content, "r")
+    new_content = l_file.read()
+    l_file.close()
+
     # Set Timezone to epoch converter
     environ['TZ']='UTC'
 
@@ -197,7 +220,7 @@ def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
         f_temp = '{0}'.format(fullpath)
 
     dest_file = open(f_temp, "w")
-    dest_file.write(content)
+    dest_file.write(new_content)
 
     # if umask_int:
     #     umask(umask_int)
@@ -349,6 +372,10 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
     return download_list, discard_list, error_list
 
 
+def extract_files(path_zip_file):
+    return []
+
+
 def _download_and_update(node, config_cluster, local_files, own_items, force, session):
 
     error_list, sychronize_list, local_discard_list = [], [], []
@@ -359,34 +386,47 @@ def _download_and_update(node, config_cluster, local_files, own_items, force, se
         error_list.append({'node': node, 'error': str(e)})
         return error_list, sychronize_list, local_discard_list
 
-    # Download
+    # Download zip
+    filenames_list = []
     for item in download_list:
+        filenames_list.append(item["file"]["name"])
+
+    try:
+        url = '{0}{1}'.format(node, "cluster/node/zip")
+
+        error, downloaded_file = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "text", session, method="post", filenames_list)
+
+        if error:
+            error_list.append({'node': node, 'reason': str(error)})
+            continue
+
+    except Exception as e:
+        error_list.append({'node': node, 'reason': str(e)})
+        continue
+
+    # Extrac zip: downloaded_file
+    zip_files = extract_files(downloaded_file)
+
+    new_download_list = []
+    for item in new_download_list:
+        for zip_item in zip_files:
+            if item['file']['name'] in zip_item:
+                item['file']['zip_path'] = zip_item
+                new_download_list.append(item)
+
+    for item in new_download_list:
         #print "+++ \tnode: {0} file: {1}".format(node, item['file']['name'])
+
         try:
-            url = '{0}{1}'.format(node, "/cluster/node/files?download="+item["file"]["name"])
-
-            error, downloaded_file = send_request(url, config_cluster["cluster.user"],
-            config_cluster["cluster.password"], False, "text", session)
-
-            if error:
-                error_list.append({'item': item, 'reason': downloaded_file})
-                continue
-
-            try:
-                file_path = common.ossec_path + item['file']['name']
-                _update_file(file_path, content=downloaded_file,
-                umask_int=item['file']['umask'],
-                mtime=item['file']['modification_time'],
-                w_mode=item['file']['write_mode'])
-
-            except Exception as e:
-                error_list.append({'item': item, 'reason': str(e)})
-                continue
+            file_path = common.ossec_path + item['file']['name']
+            _update_file(file_path, content=item['file']['zip_path'],
+            umask_int=item['file']['umask'],
+            mtime=item['file']['modification_time'],
+            w_mode=item['file']['write_mode'])
 
         except Exception as e:
             error_list.append({'item': item, 'reason': str(e)})
             continue
-
 
         item["updated"] = True
         sychronize_list.append(item)
@@ -425,15 +465,16 @@ def sync(output_file=False, force=None):
     local_files = own_items.keys()
 
     # Get cluster nodes
-    cluster = filter(lambda x: x != 'localhost', map(lambda x: x['url'], get_nodes(session)['items']))
-    cluster_tuple = map(lambda x: (x, config_cluster, set(local_files), own_items, force, session), cluster)
+    cluster = map(lambda x: x['url'], get_nodes(session)['items'])
 
-    # for node in cluster:
-    with terminating(Pool(10)) as p:
-        for lerrorl, lsynchronizel, ldiscardl in p.imap(_download_and_update_wrapper, cluster_tuple):
-            error_list.extend(lerrorl)
-            sychronize_list.extend(lsynchronizel)
-            discard_list.extend(ldiscardl)
+    for node in cluster:
+        if node != 'localhost':
+            local_error_list, local_synchronize_list,\
+                local_discard_list = _download_and_update(node, config_cluster,
+                    set(local_files), own_items, force, session)
+            error_list.extend(local_error_list)
+            sychronize_list.extend(local_synchronize_list)
+            discard_list.extend(local_discard_list)
 
 
     #print check_list

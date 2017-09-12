@@ -203,6 +203,7 @@ if __name__ == "__main__":
             '/cluster/node': cluster.get_node,
             '/cluster/nodes': cluster.get_nodes,
             '/cluster/node/token': cluster.get_token,
+            '/cluster/node/files/zip': cluster.compress_files,
             'PUT/cluster/sync': cluster.sync,
 
             '/rootcheck/:agent_id': rootcheck.print_db,

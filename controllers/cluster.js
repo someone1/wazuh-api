@@ -238,6 +238,29 @@ router.put('/sync/disable', cache(), function(req, res) {
 })
 
 /**
+ curl -u foo:bar -k -X POST -H "Content-Type:application/json" -d '{"list_path":["/tmp/test/1.txt"], "node_orig": "mynode"}' "http://127.0.0.1:55000/cluster/node/zip"
+
+**/
+router.post('/node/zip', cache(), function(req, res) {
+    logger.debug(req.connection.remoteAddress + " GET /cluster/node/files/zip");
+
+    req.apicacheGroup = "manager";
+
+    var data_request = {'function': '/cluster/node/files/zip', 'arguments': {}};
+    var filters = {'node_orig': 'alphanumeric_param', 'list_path': 'alphanumeric_param'};
+
+    // if (!filter.check(req.query, filters, req, res))  // Filter with error
+    //     return;
+
+    if ('node_orig' in req.body)
+        data_request['arguments']['node_orig'] = req.body.node_orig;
+    if ('list_path' in req.body)
+        data_request['arguments']['list_path'] = req.body.list_path;
+
+    execute.exec(python_bin, [wazuh_control], data_request, function (data) { res_h.send_file(req, res, data, 'zip'); });
+})
+
+/**
  * @api {get} /cluster/node/files Check files status
  * @apiName GetManagerFile
  * @apiGroup Info
@@ -256,7 +279,7 @@ router.get('/node/files', cache(), function(req, res) {
     req.apicacheGroup = "manager";
 
     var data_request = {'function': '/cluster/node/files', 'arguments': {}};
-    var filters = {'offset': 'numbers', 'limit': 'numbers', 'sort':'sort_param', 'search':'search_param', 'status':'alphanumeric_param', 'download':'search_param','path':'paths', 'file':'alphanumeric_param'};
+    var filters = {'offset': 'numbers', 'limit': 'numbers', 'sort':'sort_param', 'search':'search_param', 'status':'alphanumeric_param', 'download':'search_param','path':'paths', 'file':'alphanumeric_param', 'orig_node':'alphanumeric_param'};
 
     if (!filter.check(req.query, filters, req, res))  // Filter with error
         return;
@@ -281,5 +304,7 @@ router.get('/node/files', cache(), function(req, res) {
     else
         execute.exec(python_bin, [wazuh_control], data_request, function (data) { res_h.send(req, res, data); });
 })
+
+
 
 module.exports = router;
