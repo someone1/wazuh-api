@@ -15,6 +15,7 @@ from subprocess import check_output
 import requests
 from multiprocessing import Pool
 from contextlib import contextmanager
+import os
 
 CLUSTER_ITEMS = [
     {
@@ -62,7 +63,7 @@ def compress_files(list_path, node_orig):
     zf = zipfile.ZipFile(zip_name, mode='w')
     try:
         for f in list_path:
-            zf.write(f, compress_type=compression)
+            zf.write("/var/ossec" + f, compress_type=compression)
     finally:
         zf.close()
 
@@ -374,14 +375,20 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
 
 def extract_files(path_zip_file, down_list):
 
-    print "content---"
-    print path_zip_file
-    print "---"
     f_out = open("/var/ossec/stats/downloaded.zip", 'w')
     f_out.write(path_zip_file)
     f_out.close()
 
-    return []
+    zip_ref = zipfile.ZipFile("/var/ossec/stats/downloaded.zip", 'r')
+    zip_ref.extractall("/var/ossec/stats/downloaded_dir")
+    zip_ref.close()
+
+    # /var/ossec/stats/downloaded_dir/var/
+    extracted_list = []
+    for root, directories, filenames in os.walk("/var/ossec/stats/downloaded_dir"):
+        for filename in filenames:
+            extracted_list.append(os.path.join(root,filename))
+    return extracted_list
 
 
 def _download_and_update(node, config_cluster, local_files, own_items, force, session):
@@ -418,7 +425,7 @@ def _download_and_update(node, config_cluster, local_files, own_items, force, se
     zip_files = extract_files(downloaded_file, download_list)
 
     new_download_list = []
-    for item in new_download_list:
+    for item in download_list:
         for zip_item in zip_files:
             if item['file']['name'] in zip_item:
                 item['file']['zip_path'] = zip_item
