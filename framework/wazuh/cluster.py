@@ -121,8 +121,13 @@ def get_nodes(session=requests.Session()):
             data.append({'error': response, 'status':'disconnected', 'url':url})
             continue
 
-        data.append({'url':url, 'node':response['data']['node'],
-                     'status':'connected', 'cluster':response['data']['cluster']})
+        if 'data' in response:
+            data.append({'url':url, 'node':response['data']['node'],
+                         'status':'connected', 'cluster':response['data']['cluster']})
+        else:
+            data.append({'error': response['message'], 'status':'Unknown', 'url':url})
+            continue
+
 
     return {'items': data, 'totalItems': len(data)}
 
