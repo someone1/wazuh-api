@@ -372,7 +372,15 @@ def _get_download_files_list(node, config_cluster, local_files, own_items, force
     return download_list, discard_list, error_list
 
 
-def extract_files(path_zip_file):
+def extract_files(path_zip_file, down_list):
+
+    print "content---"
+    print path_zip_file
+    print "---"
+    f_out = open("/var/ossec/stats/downloaded.zip", 'w')
+    f_out.write(path_zip_file)
+    f_out.close()
+
     return []
 
 
@@ -391,21 +399,23 @@ def _download_and_update(node, config_cluster, local_files, own_items, force, se
     for item in download_list:
         filenames_list.append(item["file"]["name"])
 
-    try:
-        url = '{0}{1}'.format(node, "cluster/node/zip")
+    request_args = { "list_path": filenames_list, "node_orig": "yo"}
 
-        error, downloaded_file = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "text", session, method="post", filenames_list)
+    try:
+        url = '{0}{1}'.format(node, "/cluster/node/zip")
+
+        error, downloaded_file = send_request(url, config_cluster["cluster.user"], config_cluster["cluster.password"], False, "text", session, method="post", data=request_args)
 
         if error:
-            error_list.append({'node': node, 'reason': str(error)})
-            continue
+            error_list.append({'node': node, 'reason': "{0} - {1}".format(str(error), str(downloaded_file))})
+            return error_list, sychronize_list, local_discard_list
 
     except Exception as e:
         error_list.append({'node': node, 'reason': str(e)})
-        continue
+        return error_list, sychronize_list, local_discard_list
 
     # Extrac zip: downloaded_file
-    zip_files = extract_files(downloaded_file)
+    zip_files = extract_files(downloaded_file, download_list)
 
     new_download_list = []
     for item in new_download_list:

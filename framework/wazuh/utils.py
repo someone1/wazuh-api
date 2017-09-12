@@ -344,7 +344,7 @@ def send_request(url, user, password, verify, type, session=requests.Session(), 
                   data = str(r.text)
                   error = 401
         else:
-            r = session.post(url, verify=verify, data=data)
+            r = session.post(url, verify=verify, json=data)
             if r.status_code == 401:
                   data = str(r.text)
                   error = 401
@@ -369,6 +369,6 @@ def send_request(url, user, password, verify, type, session=requests.Session(), 
                 data = str(e)
                 error = 5
         else:
-            data = r.text
+            data = r.content
 
     return (error, data)
