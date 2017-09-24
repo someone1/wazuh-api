@@ -226,11 +226,14 @@ def _update_file(fullpath, content, umask_int=None, mtime=None, w_mode=None):
     else:
         f_temp = '{0}'.format(fullpath)
 
+    if umask_int:
+        oldumask = umask(umask_int)
+
     dest_file = open(f_temp, "w")
     dest_file.write(new_content)
 
-    # if umask_int:
-    #     umask(umask_int)
+    if umask_int:
+        umask(oldumask)
 
     dest_file.close()
 
